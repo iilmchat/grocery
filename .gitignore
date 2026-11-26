@@ -1,0 +1,21 @@
+# рабочие профили браузеров (куки, кеш, локи)
+profile_5ka/
+profile_dixy/
+profile_perekrestok/
+profiles/
+
+# результаты парсинга — они большие и меняются после каждого прогона
+*_products.json
+*_links.json
+*_done.json
+
+# кеш Python
+__pycache__/
+*.pyc
+.venv/
+venv/
+
+
+# рабочие профили браузеров (куки, кеш, локи)
+profile_*/
+profiles/
