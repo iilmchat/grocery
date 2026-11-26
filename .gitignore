@@ -19,3 +19,18 @@ venv/
 # рабочие профили браузеров (куки, кеш, локи)
 profile_*/
 profiles/
+
+# данные сборов и экспорты
+*_products.json
+*_links.json
+*_done.json
+*.json.txt
+5ka_*.txt
+
+# профили camoufox (куки и кеш браузера)
+profile_*/
+
+# служебное
+__pycache__/
+*.pyc
+.venv/

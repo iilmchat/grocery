@@ -11,6 +11,11 @@ LINKS_FILE = "perekrestok_links.json"
 DONE_FILE = "perekrestok_done.json"
 BASE = "https://www.perekrestok.ru"
 
+SCROLL_WAIT_SEC = 30     # сколько ждём новые карточки после прокрута
+POLL_INTERVAL = 1.5      # с каким шагом опрашиваем DOM
+EMPTY_STOP = 4           # пустых попыток подряд — конец списка
+MAX_ROUNDS = 200         # страховка от бесконечного цикла
+
 PARSE_CARDS = """() => {
     const cards = [];
     document.querySelectorAll('[data-qa^="product-card-"]').forEach(card => {
@@ -19,59 +24,135 @@ PARSE_CARDS = """() => {
         const a = card.querySelector('a[href*="/product/"]');
         const img = card.querySelector("img");
         const nameEl = card.querySelector('img[alt], h2, h3');
-        const offer = card.querySelector('[itemtype*="schema.org/Offer"]');
-        const priceEl = offer ? offer.querySelector('[itemprop="price"]') : null;
+        const metaAll = [...card.querySelectorAll('meta[itemprop="price"]')]
+            .map(x => x.getAttribute("content"));
+        const rublesAll = [...card.querySelectorAll('[data-qa="price-tag-rubles"]')]
+            .map(x => x.textContent.trim());
+        const penniesAll = [...card.querySelectorAll('[data-qa="price-tag-pennies"]')]
+            .map(x => x.textContent.trim());
         const badge = card.querySelector("h2[type], .chakra-badge");
-        const rating = card.querySelector('[itemtype*="AggregateRating"]');
         cards.push({
             id: pid,
             href: a ? a.getAttribute("href") : null,
-            name: nameEl ? (nameEl.getAttribute("alt") || nameEl.textContent) : null,
+            name: nameEl ? (nameEl.getAttribute("alt") || nameEl.textContent.trim()) : null,
             image: img ? img.src : null,
-            offer_text: offer ? offer.textContent.trim().slice(0, 300) : null,
-            price_attr: priceEl ? priceEl.getAttribute("content")
-                        || priceEl.getAttribute("data-price") : null,
-            badge: badge ? badge.textContent.trim() : null,
-            rating_html: rating ? rating.textContent.trim().slice(0, 100) : null,
+            meta_prices: metaAll,
+            rubles_list: rublesAll,
+            pennies_list: penniesAll,
+            prices_fallback: [...card.querySelectorAll("[class*='price']")]
+                .map(p => p.textContent.trim()).filter(t => t).slice(0, 4),
+            badge: badge ? badge.textContent.trim().slice(0, 60) : null,
+            html_head: card.outerHTML.slice(0, 500),
         });
     });
     return cards;
 }"""
 
 
-def parse_price(text):
-    """Достаёт цены из текста, допускает целые рубли без копеек."""
-    if not text:
+def _ok(v):
+    return v is not None and 5 <= v <= 1_000_000
+
+
+def price_from_meta(raw):
+    """content у meta[itemprop=price] — рубли с копейками: '379.99'."""
+    if not raw:
         return None
-    nums = re.findall(r"\d[\d\s\u00a0]*(?:[.,]\d{1,2})?", text)
+    m = re.search(r"\d[\d\s\u00a0.,]*", raw)
+    if not m:
+        return None
+    v = m.group(0).replace("\u00a0", "").replace(" ", "").replace(",", ".")
+    try:
+        f = float(v)
+    except ValueError:
+        return None
+    return f if _ok(f) else None
+
+
+def price_from_spans(rubles, pennies):
+    """'379' + '99' -> 379.99."""
+    if not rubles:
+        return None
+    if not re.fullmatch(r"[\d\s\u00a0]+", rubles.strip()):
+        return None
+    rub = int(re.sub(r"[^\d]", "", rubles))
+    pen = 0
+    if pennies:
+        pm = re.fullmatch(r"\d{1,2}", pennies.strip())
+        if pm:
+            pen = int(pm.group(0))
+    v = rub + pen / 100.0
+    return v if _ok(v) else None
+
+
+def _chunk_to_price(chunk):
+    """'95 99' -> 95.99; '1 349 99' -> 1349.99; '129,99' -> 129.99; '129' -> 129.0"""
+    chunk = chunk.replace("\u00a0", " ").strip()
+    m = re.fullmatch(r"(\d{1,3}(?: \d{3})*|\d+) (\d{2})", chunk)
+    if m:
+        return float(f"{m.group(1).replace(' ', '')}.{m.group(2)}")
+    m = re.fullmatch(r"\d{1,9}(?:[.,]\d{1,2})?", chunk)
+    if m:
+        return float(chunk.replace(",", "."))
+    return None
+
+
+def parse_price(texts):
+    """Фолбэк: цены только рядом со знаком ₽ — рейтинги не трогаем."""
     vals = []
-    for n in nums:
-        v = re.sub(r"[^\d.,]", "", n).replace("\u00a0", "").replace(" ", "").replace(",", ".")
-        try:
-            f = float(v)
-            if 5 <= f <= 1_000_000:  # отсечь проценты, рейтинги и мусор
-                vals.append(f)
-        except ValueError:
-            pass
-    return (min(vals), max(vals)) if vals else None
+    for t in texts:
+        if not t:
+            continue
+        for m in re.finditer(r"([\d\s\u00a0.,]{1,15}?)\s*₽", t):
+            v = _chunk_to_price(m.group(1))
+            if v is not None and _ok(v):
+                vals.append(v)
+    return (min(vals), max(vals)) if vals else (None, None)
 
 
 async def scroll_collect(page):
-    """Крутит страницу до насыщения, парсит карточки."""
-    prev, stale = 0, 0
-    for _ in range(40):
+    """Скроллит до упора с толчками и терпеливым ожиданием догрузки."""
+    collected: dict = {}
+    empty_streak = 0
+    last_page_num = 0
+    for _ in range(MAX_ROUNDS):
         cards = await page.evaluate(PARSE_CARDS)
-        if len(cards) == prev:
-            stale += 1
-            if stale >= 3:
-                break
+        new_count = sum(1 for c in cards if c["id"] and c["id"] not in collected)
+        for c in cards:
+            if c["id"] and c["id"] not in collected:
+                collected[c["id"]] = c
+
+        m = re.search(r"[?&]page=(\d+)", page.url)
+        page_num = int(m.group(1)) if m else 1
+        if new_count or page_num > last_page_num:
+            empty_streak = 0
         else:
-            stale = 0
-        prev = len(cards)
-        await page.mouse.wheel(0, 4000)
-        await page.wait_for_timeout(3500)
-    await page.wait_for_timeout(5000)
-    return await page.evaluate(PARSE_CARDS)
+            empty_streak += 1
+            if empty_streak >= EMPTY_STOP:
+                break
+        last_page_num = max(last_page_num, page_num)
+
+        await page.evaluate("window.scrollTo(0, document.body.scrollHeight)")
+
+        got_new = False
+        waited = 0.0
+        while waited < SCROLL_WAIT_SEC:
+            await page.wait_for_timeout(int(POLL_INTERVAL * 1000))
+            waited += POLL_INTERVAL
+            cards = await page.evaluate(PARSE_CARDS)
+            for c in cards:
+                if c["id"] and c["id"] not in collected:
+                    collected[c["id"]] = c
+                    got_new = True
+            if got_new:
+                break
+
+        if not got_new:
+            await page.evaluate(
+                "window.scrollTo(0, document.body.scrollHeight - window.innerHeight)")
+            await page.wait_for_timeout(500)
+            await page.evaluate("window.scrollTo(0, document.body.scrollHeight)")
+
+    return list(collected.values())
 
 
 async def main():
@@ -89,10 +170,11 @@ async def main():
     ) as context:
         page = context.pages[0] if context.pages else await context.new_page()
 
+        links = []
         if os.path.exists(LINKS_FILE):
             links = json.load(open(LINKS_FILE, encoding="utf-8"))
             print(f"[cache] ссылок из файла: {len(links)}")
-        else:
+        if not links:
             await page.goto(f"{BASE}/cat", wait_until="domcontentloaded", timeout=60000)
             await page.wait_for_timeout(8000)
             links = await page.evaluate("""() => {
@@ -108,11 +190,13 @@ async def main():
         done = (json.load(open(DONE_FILE, encoding="utf-8"))
                 if os.path.exists(DONE_FILE) else [])
 
+        sample_printed = False
+
         for i, link in enumerate(links, 1):
             if link in done:
                 continue
             url = link if link.startswith("http") else BASE + link
-            slug = re.sub(r"--\w+", "", link.replace("/catalog/", "")) or link
+            slug = re.sub(r"--\w+", "", link.replace("/catalog/", "").strip("/")) or link
 
             try:
                 await page.goto(url, wait_until="domcontentloaded", timeout=60000)
@@ -130,9 +214,13 @@ async def main():
                 continue
 
             if not cards:
-                print(f"[0] {slug}: пусто — похоже на кулинг, пауза 60 сек (категория останется в очереди)")
+                print(f"[0] {slug}: пусто — пауза 60 сек")
                 await asyncio.sleep(60)
                 continue
+
+            if not sample_printed:
+                print("    образец HTML карточки:", cards[0]["html_head"][:500])
+                sample_printed = True
 
             added = 0
             priced = 0
@@ -140,7 +228,29 @@ async def main():
                 pid = c["id"] or c["href"]
                 if not pid:
                     continue
-                prices = parse_price(c["offer_text"])
+
+                # собираем все цены в карточке: обычная + акционная
+                candidates = []
+                for raw in (c.get("meta_prices") or []):
+                    v = price_from_meta(raw)
+                    if v is not None:
+                        candidates.append(v)
+                for rub, pen in zip(c.get("rubles_list") or [],
+                                    c.get("pennies_list") or []):
+                    v = price_from_spans(rub, pen)
+                    if v is not None:
+                        candidates.append(v)
+                if not candidates:
+                    pmin, pmax = parse_price(c.get("prices_fallback") or [])
+                    if pmin is not None:
+                        candidates.append(pmin)
+                        if pmax is not None:
+                            candidates.append(pmax)
+                if candidates:
+                    pmin, pmax = min(candidates), max(candidates)
+                else:
+                    pmin, pmax = None, None
+
                 item = {
                     "retailer": "perekrestok",
                     "product_id": pid,
@@ -151,25 +261,24 @@ async def main():
                     "badge": c["badge"],
                     "scraped_at": datetime.now(timezone.utc).isoformat(),
                 }
-                if prices:
-                    item["price_min"], item["price_max"] = prices
+                if pmin is not None:
+                    item["price_min"], item["price_max"] = pmin, pmax
                 if pid in seen:
-                    if prices and "price_min" not in seen[pid]:
-                        seen[pid]["price_min"], seen[pid]["price_max"] = prices
+                    if pmin is not None:
+                        seen[pid]["price_min"], seen[pid]["price_max"] = pmin, pmax
                         priced += 1
                     continue
                 seen[pid] = item
                 added += 1
 
             print(f"[+] {i}/{len(links)} {slug}: карточек {len(cards)}, "
-                  f"новых {added}, добито цен {priced}, всего {len(seen)}")
+                  f"новых {added}, обновлено цен {priced}, всего {len(seen)}")
 
+            # сначала товары, потом done — прерывание всегда консистентно
+            json.dump(list(seen.values()), open(OUT, "w", encoding="utf-8"),
+                      ensure_ascii=False, indent=2)
             done.append(link)
             json.dump(done, open(DONE_FILE, "w", encoding="utf-8"))
-            if i % 5 == 0:
-                json.dump(list(seen.values()), open(OUT, "w", encoding="utf-8"),
-                          ensure_ascii=False, indent=2)
-                print(f"    [checkpoint] {len(seen)} товаров -> {OUT}")
 
             await asyncio.sleep(8)
 
