@@ -11,9 +11,8 @@ LINKS_FILE = "pyaterochka_links.json"
 DONE_FILE = "pyaterochka_done.json"
 BASE = "https://5ka.ru"
 
-SCROLL_WAIT_SEC = 30     # сколько ждём новые карточки после прокрута
-POLL_INTERVAL = 1.5      # с каким шагом опрашиваем DOM
-EMPTY_STOP = 4           # пустых попыток подряд — конец списка
+SCROLL_WAIT_SEC = 12     # сколько ждём новые карточки после прокрута
+POLL_INTERVAL = 1.0      # с каким шагом опрашиваем DOM
 MAX_ROUNDS = 200         # страховка от бесконечного цикла
 
 PARSE_CARDS = """() => {
@@ -97,7 +96,7 @@ def _chunk_to_price(chunk):
 
 
 def parse_price(texts):
-    """Фолбэк: цены только рядом со знаком ₽ — рейтинги не трогаем."""
+    """Фолбэк: цены только рядом со знаком рубля — рейтинги не трогаем."""
     vals = []
     for t in texts:
         if not t:
@@ -110,27 +109,15 @@ def parse_price(texts):
 
 
 async def scroll_collect(page):
-    """Скроллит до упора с толчками и терпеливым ожиданием догрузки."""
+    """Скроллит до упора: конец списка = нет новых карточек И высота не растёт."""
     collected: dict = {}
-    empty_streak = 0
-    last_page_num = 0
+    stable_rounds = 0
+    last_height = 0
     for _ in range(MAX_ROUNDS):
         cards = await page.evaluate(PARSE_CARDS)
-        new_count = sum(1 for c in cards if c["id"] and c["id"] not in collected)
         for c in cards:
             if c["id"] and c["id"] not in collected:
                 collected[c["id"]] = c
-
-        # прогресс по URL — адрес сам меняется на ?page=N при скролле
-        m = re.search(r"[?&]page=(\d+)", page.url)
-        page_num = int(m.group(1)) if m else 1
-        if new_count or page_num > last_page_num:
-            empty_streak = 0
-        else:
-            empty_streak += 1
-            if empty_streak >= EMPTY_STOP:
-                break
-        last_page_num = max(last_page_num, page_num)
 
         await page.evaluate("window.scrollTo(0, document.body.scrollHeight)")
 
@@ -147,6 +134,16 @@ async def scroll_collect(page):
             if got_new:
                 break
 
+        # конец списка: не было новых карточек и высота страницы не изменилась
+        height = await page.evaluate("document.body.scrollHeight")
+        if not got_new and height == last_height:
+            stable_rounds += 1
+            if stable_rounds >= 2:
+                break
+        else:
+            stable_rounds = 0
+        last_height = height
+
         if not got_new:
             # толчок: вверх на экран и обратно вниз — перезапускает триггер подгрузки
             await page.evaluate(
@@ -155,6 +152,7 @@ async def scroll_collect(page):
             await page.evaluate("window.scrollTo(0, document.body.scrollHeight)")
 
     return list(collected.values())
+# === КОНЕЦ scroll_collect: если видишь эту строку, блок скопировался целиком ===
 
 
 async def main():
@@ -301,7 +299,7 @@ async def main():
             done.append(link)
             json.dump(done, open(DONE_FILE, "w", encoding="utf-8"))
 
-            await asyncio.sleep(8)
+            await asyncio.sleep(5)
 
     json.dump(list(seen.values()), open(OUT, "w", encoding="utf-8"),
               ensure_ascii=False, indent=2)
@@ -311,5 +309,7 @@ async def main():
         print(f"с ценами: {with_price} из {len(seen)}")
         sample = list(seen.values())[0]
         print("образец записи:", json.dumps(sample, ensure_ascii=False)[:500])
+
+# === КОНЕЦ ФАЙЛА: если видишь эту строку, хвост скопировался целиком ===
 
 asyncio.run(main())
