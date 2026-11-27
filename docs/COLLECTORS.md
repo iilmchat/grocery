@@ -180,6 +180,36 @@
 3 725 в наличии, 182 категории. Цены привязаны к конкретному магазину —
 товары без цены в нём в выгрузку не попадают.
 
+## Победа — разведка 27.11.2026, сборщик не добавлен
+
+Сайт `https://магазинпобеда.рф/` — витрина с новостями и списком магазинов,
+каталога цен там нет. Приложение `ru.tkleto.app.magazinpobeda` (Kotlin +
+Ktor), APK скачан через публичный API RuStore (`appId 2063596798`).
+OpenAPI-спецификации доступны по `/core/openapi.json` и `/openapi.json`.
+
+| Назначение | Эндпоинт | Доступ |
+| :--- | :--- | :--- |
+| Каталог | `GET https://pobeda-magazin.siberian.pro/core/api/catalog/` | без токена отдаёт только 87 товаров; параметры `category_ids`, `shop_id`, `limit`, `offset`, `sort`, `search` |
+| Категории | `GET .../core/api/categories/?parent_id=…` | 4 корня, подкатегории через `parent_id` |
+| Магазины | `GET .../core/api/shops` | 791 магазин |
+| Карточка | `GET .../core/api/catalog/{goods_id}`, `/ean/{ean}` | без токена |
+| Фильтры | `GET .../core/api/catalog/filters?category_ids=…` | `401 Invalid authentication credentials` |
+| Полная выгрузка | `GET .../core/api/catalog/sync?shop_id=…&updated_to=…&limit=…&after_id=…` | `401`, нужен JWT |
+| OTP | `POST https://fastapi-app-prod.gulliver-ul.ru/auth/api/auth/otp/generate` | `{"phone": "+7…"}`, ответ `retryAfter` |
+| Токены | `POST .../auth/api/auth/sms` | `{"phone", "code"}` → `access_token`, `refresh_token` |
+
+Важно: префиксы разные — `core/api/…` и `auth/api/…` (не просто `/api/…`).
+Анонимный каталог одинаков для всех магазинов: 25 случайных `shop_id`
+дали те же 87 `goods_id`. Похоже, полный ассортимент открывается только
+через `/catalog/sync` с JWT.
+
+Проблема на текущий момент: после успешной отправки OTP хост
+`fastapi-app-prod.gulliver-ul.ru` (`185.175.44.20:443`) перестал отвечать по
+TCP, обменять код на токен не удалось. Хост
+`pobeda-magazin.siberian.pro/auth/...` жив, но его БД не знает этот номер
+(`user_not_found`). Дальше — повторить OTP, когда auth-хост поднимется,
+и проверить `/catalog/sync`.
+
 ## Вспомогательные скрипты
 
 | Файл | Назначение |
