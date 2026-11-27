@@ -111,7 +111,7 @@
 
 Подготовка профиля: `warmup_pk.py` (для Пятёрочки — `warmup_5ka.py`).
 
-## Верный — разведка 27.11.2026, сборщик не добавлен
+## Верный — `verno_collect.py` (API приложения)
 
 Официальный сайт сети — `https://www.verno-info.ru/` (IP `185.191.32.15`,
 доступен). Страница `/products` показывает только PDF-каталоги акций по
@@ -146,19 +146,39 @@
 | `POST .../v2/catalog/products/urls` с `{"uuids": [...]}` | URLs на JSON товаров по их ID: имя, картинка, описание, характеристики, но **без цен** |
 
 Цены и остатки живут в API `https://app.verno-dostavka.ru/api3/`.
-Аутентификация там — **query-параметр `delivery_token`** (не `Authorization`):
-`GET /api3/opc/list` с ним отдаёт 1 806 магазинов. Но
-`/api3/catalog/categories-and-combos`, `/api3/catalog/combos/`,
-`/api4/sync/stocks` отвечают `400 «Не выбран магазин»` /
-`«Не указан магазин пользователя»`: не найден способ выбрать магазин
- server-side (перебирались `X-Store`, `store`, `store_uid`, `store_id`,
- `opc`, cookies и т.п.). Без выбранного магазина цены недоступны.
+Аутентификация там — **query-параметр `delivery_token`** (не `Authorization`).
+Каталожные эндпоинты сначала отвечают `400 «Не выбран магазин»`: магазин
+фиксируется на сервере, когда пользователь выбирает его в приложении.
+После выбора в приложении `GET /api3/catalog/categories-and-combos`,
+`/api3/catalog/combos/`, `/api3/catalog/sliders/` и `/api4/sync/stocks`
+начинают отдавать данные. Текущий `store_id` берётся из
+`GET /api3/address/get-addresses`.
 
-Клиент отправляет заголовки `X-App-Version`, `X-Platform`,
-`X-Region-City-Id`, `X-Store`. Токены хранятся вне репозитория. Для
-завершения сборщика нужно выяснить, каким запросом приложение фиксирует
-выбранный магазин (проще всего — поймать трафик приложения после выбора
-магазина в интерфейсе).
+Цены отдаёт `apptrade`:
+`GET .../v2/catalog/prices/<store_id>` (Bearer JWT) возвращает подписанную
+ссылку на `price.ivoin.ru/mp/prices/<store_id>.json` с полями
+`goods_id`, `price_for_unit`, `with_sale`, `price_for_quantum`.
+
+Сборщик [`verno_collect.py`](../verno_collect.py) объединяет категории,
+индекс товаров, карточки, цены и остатки в `verno_products.json`. Токены
+создаёт [`verno_login.py`](../verno_login.py) и сохраняет в
+`verno_auth.json` (в Git не попадает). Важно: повторный вход в приложении
+инвалидирует предыдущий JWT — перед сбором нужно перелогиниться.
+
+Алгоритм:
+
+1. `GET .../v2/catalog/categories` → 229 категорий (построение `category_path`).
+2. `GET .../v2/catalog/filters` → индекс из 31 367 товаров.
+3. `GET .../v2/catalog/prices/<store_id>` → цены и скидки по магазину.
+4. `GET https://app.verno-dostavka.ru/api4/sync/stocks?delivery_token=…`
+   → остатки (`max_count`).
+5. `POST .../v2/catalog/products/urls` батами по **100** UUID (лимит API)
+   → подписанные ссылки на карточки; карточки кешируются в
+   `verno_goods_cache.jsonl`.
+
+В контрольном прогоне 27.11.2026: **4 466 товаров с ценами**, из них
+3 725 в наличии, 182 категории. Цены привязаны к конкретному магазину —
+товары без цены в нём в выгрузку не попадают.
 
 ## Вспомогательные скрипты
 

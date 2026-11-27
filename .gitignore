@@ -34,3 +34,7 @@ profile_*/
 __pycache__/
 *.pyc
 .venv/
+
+# токены Верного (секреты) и кеш карточек
+verno_auth.json
+verno_goods_cache.jsonl
