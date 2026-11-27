@@ -110,16 +110,21 @@ def parse_price(texts):
 
 
 async def page_state(page):
-    """(заглушка, капча) по реальным признакам, а не по слову в HTML."""
+    """(заглушка, капча, жёсткий блок) по реальным признакам, а не по слову в HTML.
+
+    Жёсткий блок — страница X5 «Проблемы со связью. Проверьте настройки
+    интернета и VPN»: банер целиком на IP, ожиданием за 15 минут не снимается.
+    """
     content = await page.content()
     low = content.lower()
     stub = "не смогли загрузить категории" in low
+    blocked = "проблемы со связью" in low
     title = (await page.title()).lower()
     widget = await page.locator(
         "iframe[src*='challenge'], [class*='captcha'], [id*='captcha']"
     ).count()
     captcha = widget > 0 or "captcha" in title or "доступ ограничен" in title
-    return stub, captcha
+    return stub, captcha, blocked
 
 
 async def scroll_collect(page):
@@ -230,7 +235,15 @@ async def main():
         except Exception as e:
             print(f"[warmup] не получилось ({type(e).__name__}) — идём дальше")
 
+        # стартовая проверка: если главная отдаёт блок-страницу — даже не начинаем
+        _stub, _cap, start_blocked = await page_state(page)
+        if start_blocked:
+            print("[!!] IP заблокирован X5 («Проблемы со связью») — прогон не начинаю. "
+                  "Отдых 2–3 часа, потом перезапуск")
+            links = []   # цикл пройдёт нулевой длины, хвост запишет кэш как есть
+
         sample_printed = False
+        hard_stop = False
 
         for i, link in enumerate(links, 1):
             if link in done:
@@ -242,7 +255,12 @@ async def main():
                 await page.goto(url, wait_until="domcontentloaded", timeout=60000)
                 await page.wait_for_timeout(random.randint(4000, 8000))
 
-                stub, captcha = await page_state(page)
+                stub, captcha, blocked = await page_state(page)
+                if blocked:
+                    print(f"[!!] {slug}: жёсткий блок IP («Проблемы со связью») — "
+                          "останавливаю прогон. Отдых 2–3 часа, потом перезапуск")
+                    hard_stop = True
+                    break
                 if stub:
                     print(f"[!] {slug}: мягкий блок 5ka (заглушка каталога) — останавливаю прогон")
                     break
@@ -251,10 +269,16 @@ async def main():
                     resumed = False
                     for _ in range(90):
                         await page.wait_for_timeout(10000)
-                        stub, captcha = await page_state(page)
+                        stub, captcha, blocked = await page_state(page)
+                        if blocked:
+                            print("[!!] во время ожидания пришёл жёсткий блок IP — стоп")
+                            hard_stop = True
+                            break
                         if not captcha:
                             resumed = True
                             break
+                    if hard_stop:
+                        break
                     if not resumed:
                         print("[!] капча не решена за 15 минут — стоп, "
                               "даю сайту остыть, резюм подхватит")
@@ -343,17 +367,18 @@ async def main():
             done.append(link)
             json.dump(done, open(DONE_FILE, "w", encoding="utf-8"))
 
-            # человеческая пауза между категориями: 8–20 секунд, каждый раз разная
-            await asyncio.sleep(random.uniform(8, 20))
+            # человеческая пауза между категориями: 15–35 секунд
+            # (после жёсткого блока IP — щадящий темп обязателен)
+            await asyncio.sleep(random.uniform(15, 35))
 
     json.dump(list(seen.values()), open(OUT, "w", encoding="utf-8"),
               ensure_ascii=False, indent=2)
-    print(f"\nИТОГ: {len(seen)} товаров -> {OUT}")
+    print(f"\nИТОГ: {len(seen)} товаров -> {OUT}"
+          + (" (остановлен по жёсткому блоку IP — данные целы, резюм с последней категории)"
+             if hard_stop else ""))
     if seen:
         with_price = sum(1 for v in seen.values() if "price_min" in v)
         print(f"с ценами: {with_price} из {len(seen)}")
-        sample = list(seen.values())[0]
-        print("образец записи:", json.dumps(sample, ensure_ascii=False)[:500])
 
 # === КОНЕЦ ФАЙЛА: если видишь эту строку, хвост скопировался целиком ===
 
