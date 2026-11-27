@@ -38,3 +38,22 @@ __pycache__/
 # токены Верного (секреты) и кеш карточек
 verno_auth.json
 verno_goods_cache.jsonl
+
+# данные прогонов
+*_products.json
+*_done.json
+*_empty.json
+*_details_state.json
+
+# профили браузера
+profile_*/
+**/profile_*/
+
+# мусор питона
+__pycache__/
+*.pyc
+.venv/
+
+*_done*.json
+dixy_probe*.json
+*_cache.jsonl

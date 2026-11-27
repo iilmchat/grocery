@@ -1,6 +1,7 @@
 import asyncio
 import json
 import os
+import random
 import re
 from datetime import datetime, timezone
 
@@ -11,7 +12,7 @@ LINKS_FILE = "perekrestok_links.json"
 DONE_FILE = "perekrestok_done.json"
 BASE = "https://www.perekrestok.ru"
 
-SCROLL_WAIT_SEC = 18     # сколько ждём новые карточки после прокрута
+SCROLL_WAIT_SEC = 12     # сколько ждём новые карточки после прокрута
 POLL_INTERVAL = 1.0      # с каким шагом опрашиваем DOM
 MAX_ROUNDS = 200         # страховка от бесконечного цикла
 
@@ -134,7 +135,8 @@ async def scroll_collect(page):
         got_new = False
         waited = 0.0
         while waited < SCROLL_WAIT_SEC:
-            await page.wait_for_timeout(int(POLL_INTERVAL * 1000))
+            # джиттер: шаг опроса не идеально ровный
+            await page.wait_for_timeout(int(POLL_INTERVAL * 1000) + random.randint(0, 200))
             waited += POLL_INTERVAL
             cards = await page.evaluate(PARSE_CARDS)
             for c in cards:
@@ -158,7 +160,7 @@ async def scroll_collect(page):
             # толчок: вверх на экран и обратно вниз — перезапускает триггер подгрузки
             await page.evaluate(
                 "window.scrollTo(0, document.body.scrollHeight - window.innerHeight)")
-            await page.wait_for_timeout(500)
+            await page.wait_for_timeout(400 + random.randint(0, 400))
             await page.evaluate("window.scrollTo(0, document.body.scrollHeight)")
 
     return list(collected.values())
@@ -179,6 +181,18 @@ async def main():
         i_know_what_im_doing=True,
     ) as context:
         page = context.pages[0] if context.pages else await context.new_page()
+
+        # человеческий вход: главная, пауза, лёгкий скролл — прежде чем лезть в категории
+        try:
+            await page.goto(BASE, wait_until="domcontentloaded", timeout=60000)
+            await page.wait_for_timeout(random.randint(5000, 9000))
+            await page.evaluate(
+                "window.scrollTo(0, document.body.scrollHeight * 0.3)")
+            await page.wait_for_timeout(random.randint(1500, 3500))
+            await page.evaluate("window.scrollTo(0, 0)")
+            print("[warmup] главная открыта, пауза выдержана")
+        except Exception as e:
+            print(f"[warmup] не получилось ({type(e).__name__}) — идём дальше")
 
         links = []
         if os.path.exists(LINKS_FILE):
@@ -210,7 +224,7 @@ async def main():
 
             try:
                 await page.goto(url, wait_until="domcontentloaded", timeout=60000)
-                await page.wait_for_timeout(6000)
+                await page.wait_for_timeout(random.randint(4000, 8000))
 
                 captcha, title = await is_captcha(page)
                 if captcha:
@@ -220,25 +234,25 @@ async def main():
                         await asyncio.sleep(600)
                         await page.goto(url, wait_until="domcontentloaded",
                                         timeout=60000)
-                        await page.wait_for_timeout(6000)
+                        await page.wait_for_timeout(random.randint(4000, 8000))
                         captcha, title = await is_captcha(page)
                         if not captcha:
                             resumed = True
                             break
                         print(f"    [captcha] попытка {attempt + 1}: ещё держится")
                     if not resumed:
-                        print(f"[!] капча не ушла за 3 попытки — останавливаю прогон")
+                        print("[!] капча не ушла за 3 попытки — останавливаю прогон")
                         break
 
                 cards = await scroll_collect(page)
             except Exception as e:
                 print(f"[!] {slug}: {type(e).__name__}: {str(e)[:100]} — пропускаю")
-                await asyncio.sleep(30)
+                await asyncio.sleep(random.uniform(25, 45))
                 continue
 
             if not cards:
-                print(f"[0] {slug}: пусто — пауза 60 сек")
-                await asyncio.sleep(60)
+                print(f"[0] {slug}: пусто — пауза {int(random.uniform(60, 90))} сек")
+                await asyncio.sleep(random.uniform(60, 90))
                 continue
 
             if not sample_printed:
@@ -304,7 +318,8 @@ async def main():
             done.append(link)
             json.dump(done, open(DONE_FILE, "w", encoding="utf-8"))
 
-            await asyncio.sleep(10)
+            # человеческая пауза между категориями: 8–20 секунд, каждый раз разная
+            await asyncio.sleep(random.uniform(8, 20))
 
     json.dump(list(seen.values()), open(OUT, "w", encoding="utf-8"),
               ensure_ascii=False, indent=2)

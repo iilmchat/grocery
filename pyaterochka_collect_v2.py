@@ -1,6 +1,7 @@
 import asyncio
 import json
 import os
+import random
 import re
 from datetime import datetime, timezone
 
@@ -11,7 +12,7 @@ LINKS_FILE = "pyaterochka_links.json"
 DONE_FILE = "pyaterochka_done.json"
 BASE = "https://5ka.ru"
 
-SCROLL_WAIT_SEC = 18     # сколько ждём новые карточки после прокрута
+SCROLL_WAIT_SEC = 12     # сколько ждём новые карточки после прокрута
 POLL_INTERVAL = 1.0      # с каким шагом опрашиваем DOM
 MAX_ROUNDS = 200         # страховка от бесконечного цикла
 
@@ -108,6 +109,19 @@ def parse_price(texts):
     return (min(vals), max(vals)) if vals else (None, None)
 
 
+async def page_state(page):
+    """(заглушка, капча) по реальным признакам, а не по слову в HTML."""
+    content = await page.content()
+    low = content.lower()
+    stub = "не смогли загрузить категории" in low
+    title = (await page.title()).lower()
+    widget = await page.locator(
+        "iframe[src*='challenge'], [class*='captcha'], [id*='captcha']"
+    ).count()
+    captcha = widget > 0 or "captcha" in title or "доступ ограничен" in title
+    return stub, captcha
+
+
 async def scroll_collect(page):
     """Скроллит до упора: конец списка = нет новых карточек И высота не растёт."""
     collected: dict = {}
@@ -124,7 +138,8 @@ async def scroll_collect(page):
         got_new = False
         waited = 0.0
         while waited < SCROLL_WAIT_SEC:
-            await page.wait_for_timeout(int(POLL_INTERVAL * 1000))
+            # джиттер: шаг опроса не идеально ровный
+            await page.wait_for_timeout(int(POLL_INTERVAL * 1000) + random.randint(0, 200))
             waited += POLL_INTERVAL
             cards = await page.evaluate(PARSE_CARDS)
             for c in cards:
@@ -148,7 +163,7 @@ async def scroll_collect(page):
             # толчок: вверх на экран и обратно вниз — перезапускает триггер подгрузки
             await page.evaluate(
                 "window.scrollTo(0, document.body.scrollHeight - window.innerHeight)")
-            await page.wait_for_timeout(500)
+            await page.wait_for_timeout(400 + random.randint(0, 400))
             await page.evaluate("window.scrollTo(0, document.body.scrollHeight)")
 
     return list(collected.values())
@@ -165,7 +180,7 @@ async def main():
         print(f"[cache] товаров из прошлого прогона: {len(seen)}")
 
     async with AsyncCamoufox(
-        headless=True,
+        headless=False,
         persistent_context=True,
         user_data_dir="profile_5ka",
         i_know_what_im_doing=True,
@@ -203,6 +218,18 @@ async def main():
         done = (json.load(open(DONE_FILE, encoding="utf-8"))
                 if os.path.exists(DONE_FILE) else [])
 
+        # человеческий вход: главная, пауза, лёгкий скролл — прежде чем лезть в категории
+        try:
+            await page.goto(BASE, wait_until="domcontentloaded", timeout=60000)
+            await page.wait_for_timeout(random.randint(5000, 9000))
+            await page.evaluate(
+                "window.scrollTo(0, document.body.scrollHeight * 0.3)")
+            await page.wait_for_timeout(random.randint(1500, 3500))
+            await page.evaluate("window.scrollTo(0, 0)")
+            print("[warmup] главная открыта, пауза выдержана")
+        except Exception as e:
+            print(f"[warmup] не получилось ({type(e).__name__}) — идём дальше")
+
         sample_printed = False
 
         for i, link in enumerate(links, 1):
@@ -213,7 +240,28 @@ async def main():
 
             try:
                 await page.goto(url, wait_until="domcontentloaded", timeout=60000)
-                await page.wait_for_timeout(6000)
+                await page.wait_for_timeout(random.randint(4000, 8000))
+
+                stub, captcha = await page_state(page)
+                if stub:
+                    print(f"[!] {slug}: мягкий блок 5ka (заглушка каталога) — останавливаю прогон")
+                    break
+                if captcha:
+                    print(f"[!] {slug}: капча — реши в окне, жду до 15 минут")
+                    resumed = False
+                    for _ in range(90):
+                        await page.wait_for_timeout(10000)
+                        stub, captcha = await page_state(page)
+                        if not captcha:
+                            resumed = True
+                            break
+                    if not resumed:
+                        print("[!] капча не решена за 15 минут — стоп, "
+                              "даю сайту остыть, резюм подхватит")
+                        break
+                    # мягкое касание после решения: пауза, чтобы не словить снова
+                    print("[captcha] решена — пауза 3 мин, потом продолжаю")
+                    await asyncio.sleep(180)
 
                 content = await page.content()
                 if "такой страницы больше нет" in content:
@@ -221,19 +269,16 @@ async def main():
                     done.append(link)
                     json.dump(done, open(DONE_FILE, "w", encoding="utf-8"))
                     continue
-                if "captcha" in content.lower():
-                    print(f"[!] {slug}: капча на странице — останавливаю прогон")
-                    break
 
                 cards = await scroll_collect(page)
             except Exception as e:
                 print(f"[!] {slug}: {type(e).__name__}: {str(e)[:100]} — пропускаю")
-                await asyncio.sleep(30)
+                await asyncio.sleep(random.uniform(25, 45))
                 continue
 
             if not cards:
-                print(f"[0] {slug}: пусто — пауза 60 сек")
-                await asyncio.sleep(60)
+                print(f"[0] {slug}: пусто — пауза {int(random.uniform(60, 90))} сек")
+                await asyncio.sleep(random.uniform(60, 90))
                 continue
 
             if not sample_printed:
@@ -271,7 +316,7 @@ async def main():
 
                 item = {
                     "retailer": "pyaterochka",
-                    "product_id": c["id"],
+                    "product_id": key,
                     "url": BASE + c["href"] if c["href"] and not c["href"].startswith("http") else c["href"],
                     "name": (c["name"] or "").strip(),
                     "image_url": c["image"],
@@ -282,7 +327,7 @@ async def main():
                 if pmin is not None:
                     item["price_min"], item["price_max"] = pmin, pmax
                 if key in seen:
-                    # свежая цена всегда перезаписывает старую — кеш лечится пересбором
+                    # свежая цена всегда перезаписывает старую
                     if pmin is not None:
                         seen[key]["price_min"], seen[key]["price_max"] = pmin, pmax
                         priced += 1
@@ -293,13 +338,13 @@ async def main():
             print(f"[+] {i}/{len(links)} {slug}: карточек {len(cards)}, "
                   f"новых {added}, обновлено цен {priced}, всего {len(seen)}")
 
-            # сначала товары, потом done — прерывание всегда консистентно
             json.dump(list(seen.values()), open(OUT, "w", encoding="utf-8"),
                       ensure_ascii=False, indent=2)
             done.append(link)
             json.dump(done, open(DONE_FILE, "w", encoding="utf-8"))
 
-            await asyncio.sleep(10)
+            # человеческая пауза между категориями: 8–20 секунд, каждый раз разная
+            await asyncio.sleep(random.uniform(8, 20))
 
     json.dump(list(seen.values()), open(OUT, "w", encoding="utf-8"),
               ensure_ascii=False, indent=2)
