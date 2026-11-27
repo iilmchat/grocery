@@ -34,6 +34,7 @@
 | **Пятёрочка** | [`pyaterochka_collect_v2.py`](pyaterochka_collect_v2.py) | DOM + Camoufox, persistent-профиль | 2 142 | 🟡 капча |
 | **Верный** | [`verno_collect.py`](verno_collect.py) | API приложения (JWT + `delivery_token`) | 4 466 в магазине | ✅ нужна SMS-авторизация |
 | **Магнит** | [`magnit_collect.py`](magnit_collect.py) | Webgate API сайта `magnit.ru`, без авторизации | 21 126 | ✅ |
+| **Твой дом** | [`tvoydom_collect.py`](tvoydom_collect.py) | внутренний API `tvoydom.ru/api/internal/catalog/` | 44 094 | ✅ |
 
 > Статус 🟡 означает: сборщик рабочий, но полный прогон упирается в капчу
 > или в незавершённую дозагрузку категорий. Для «полного» прогона используйте
@@ -111,6 +112,9 @@ python verno_collect.py
 
 # Магнит — без авторизации
 python magnit_collect.py
+
+# Твой дом — внутренний API сайта, кеш в tvoydom_cards_cache.jsonl
+python tvoydom_collect.py
 ```
 
 Каждый сборщик можно прервать `Ctrl+C` и запустить заново — он продолжит

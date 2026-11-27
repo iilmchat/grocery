@@ -309,14 +309,18 @@ TCP, обменять код на токен не удалось. Хост
 эндпоинт без авторизации:
 
 - `POST https://tvoydom.ru/api/internal/catalog/<section_slug>` с телом
-  `{"page": N}` (заголовок `X-Requested-With: XMLHttpRequest`);
-- ответ: `{total, filter, cards}`, по 15 карточек на страницу;
-- 870 разделов берутся из `/sitemap-sections.xml`; карточки содержат `price`,
-  `discountPrice`, `url`, `photo`, `sectionId`, остатки и характеристики.
+  `{"page": N, "pageSize": 100}` (заголовок `X-Requested-With: XMLHttpRequest`);
+  без `pageSize` отдаётся только 15 карточек;
+- ответ: `{total, filter, cards}`; 870 разделов берутся из
+  `/sitemap-sections.xml`; карточки содержат `price`, `discountPrice`, `url`,
+  `photo`, `sectionId`, остатки и характеристики.
+- карточки кешируются в `tvoydom_cards_cache.jsonl`; `EXPORT_ONLY=1` строит
+  выгрузку только из кеша, `START_INDEX`/`END_INDEX` позволяют дособрать хвост.
 
 Мобильный API `https://tvoydom.ru/mobile/api/v1/catalog` требует валидную
 версию клиента и отдаёт `449 «Необходимо обновить приложение»`, поэтому
-используется именно внутренний API сайта.
+используется именно внутренний API сайта. Контрольный прогон 27.11.2026:
+**44 094 товара, все с ценами, 558 категорий**.
 
 ## О'КЕЙ — разведка 27.11.2026, сборщик не добавлен
 

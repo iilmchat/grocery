@@ -73,10 +73,14 @@ def walk(slug):
 
 def main():
     sections = get_sections()
-    print(f"[sections] {len(sections)}", flush=True)
+    start = int(os.environ.get("START_INDEX", "0"))
+    end = int(os.environ.get("END_INDEX", str(len(sections))))
+    sections = sections[start:end]
+    export_only = os.environ.get("EXPORT_ONLY") == "1"
+    print(f"[sections] {len(sections)} (index {start}:{end})", flush=True)
 
     goods = {}
-    cache_f = open(CACHE, "a", encoding="utf-8")
+    cache_f = None if export_only else open(CACHE, "a", encoding="utf-8")
     if os.path.exists(CACHE):
         for line in open(CACHE, encoding="utf-8"):
             try:
@@ -87,21 +91,23 @@ def main():
         print(f"[cache] {len(goods)}", flush=True)
 
     try:
-        with ThreadPoolExecutor(max_workers=WORKERS) as ex:
-            futs = [ex.submit(walk, slug) for slug in sections]
-            done = 0
-            for f in as_completed(futs):
-                slug, cards = f.result()
-                for c in cards:
-                    cid = c.get("id")
-                    if cid and cid not in goods:
-                        goods[cid] = c
-                        cache_f.write(json.dumps(c, ensure_ascii=False) + "\n")
-                done += 1
-                if done % 50 == 0:
-                    print(f"[sections] {done}/{len(sections)}, товаров {len(goods)}", flush=True)
+        if not export_only:
+            with ThreadPoolExecutor(max_workers=WORKERS) as ex:
+                futs = [ex.submit(walk, slug) for slug in sections]
+                done = 0
+                for f in as_completed(futs):
+                    slug, cards = f.result()
+                    for c in cards:
+                        cid = c.get("id")
+                        if cid and cid not in goods:
+                            goods[cid] = c
+                            cache_f.write(json.dumps(c, ensure_ascii=False) + "\n")
+                    done += 1
+                    if done % 50 == 0:
+                        print(f"[sections] {done}/{len(sections)}, товаров {len(goods)}", flush=True)
     finally:
-        cache_f.close()
+        if cache_f:
+            cache_f.close()
 
     now = datetime.now(timezone.utc).isoformat()
     out = []
