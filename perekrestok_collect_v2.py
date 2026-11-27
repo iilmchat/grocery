@@ -15,6 +15,9 @@ BASE = "https://www.perekrestok.ru"
 SCROLL_WAIT_SEC = 12     # сколько ждём новые карточки после прокрута
 POLL_INTERVAL = 1.0      # с каким шагом опрашиваем DOM
 MAX_ROUNDS = 200         # страховка от бесконечного цикла
+STABLE_STOP = 3          # тихих кругов подряд — конец списка (обычные категории)
+STABLE_STOP_SMALL = 6    # то же для категорий с одной порцией (<= 36 карточек):
+                         # даём ленте больше шансов ожить, но не висим вечность
 
 PARSE_CARDS = """() => {
     const cards = [];
@@ -136,7 +139,15 @@ async def scroll_collect(page):
         return els.length;
     }"""
 
-    for _ in range(MAX_ROUNDS):
+    # анти-фальстарт: ждём первую порцию карточек, чтобы не объявить
+    # конец списка до того, как лента вообще отрисовалась
+    try:
+        await page.wait_for_selector('[data-qa^="product-card-"]', timeout=20000)
+    except Exception:
+        pass
+    await page.wait_for_timeout(2000)
+
+    for rounds in range(1, MAX_ROUNDS + 1):
         cards = await page.evaluate(PARSE_CARDS)
         for c in cards:
             if c["id"] and c["id"] not in collected:
@@ -145,7 +156,10 @@ async def scroll_collect(page):
         n = len(collected)
         if n == last_count:
             stable_rounds += 1
-            if stable_rounds >= 3:      # три круга без новых — конец списка
+            # маленьким категориям даём больше тихих кругов: они либо
+            # правда короткие, либо подгрузка у них просыпается позже
+            limit = STABLE_STOP_SMALL if n <= 36 else STABLE_STOP
+            if stable_rounds >= limit:
                 break
         else:
             stable_rounds = 0
@@ -166,6 +180,18 @@ async def scroll_collect(page):
             await page.wait_for_timeout(300 + random.randint(0, 300))
             await page.mouse.wheel(0, 2600)
 
+            # 3) вдруг лента встала, а внизу кнопка «Показать ещё»
+            btn = await page.evaluate("""() => {
+                const el = [...document.querySelectorAll('button, a, div[role="button"]')]
+                    .find(e => /показать\\s+ещ[её]/i.test((e.textContent || '').trim()));
+                if (el) { el.click(); return true; }
+                return false;
+            }""")
+            if btn:
+                print("        [scroll] нажал «Показать ещё»")
+
+    print(f"        [scroll] итог {len(collected)} карточек, кругов {rounds}/{MAX_ROUNDS}, "
+          f"тихих {stable_rounds}")
     return list(collected.values())
 # === КОНЕЦ scroll_collect: если видишь эту строку, блок скопировался целиком ===
 
@@ -322,7 +348,7 @@ async def main():
             json.dump(done, open(DONE_FILE, "w", encoding="utf-8"))
 
             # человеческая пауза между категориями: 8–20 секунд, каждый раз разная
-            await asyncio.sleep(random.uniform(8, 20))
+            await asyncio.sleep(random.uniform(15, 35))
 
     json.dump(list(seen.values()), open(OUT, "w", encoding="utf-8"),
               ensure_ascii=False, indent=2)
