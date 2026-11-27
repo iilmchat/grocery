@@ -111,6 +111,33 @@
 
 Подготовка профиля: `warmup_pk.py` (для Пятёрочки — `warmup_5ka.py`).
 
+## Верный — разведка 27.11.2026, сборщик не добавлен
+
+Официальный сайт сети — `https://www.verno-info.ru/` (IP `185.191.32.15`,
+доступен). Страница `/products` показывает только PDF-каталоги акций по
+регионам (`/storage/catalogs/<region>/...pdf`) и не содержит товаров с
+ценами. Адрес `verny.ru` (`31.177.76.145`) — не сайт сети: DNS резолвится,
+но TCP/443 таймаутится — по этому симптому почти наверняка и проверялся
+«недоступный» домен в старом прогоне.
+
+Настоящий каталог обслуживает мобильное приложение `ru.vcr.verniy_all`:
+его API-эндпоинты вытащены из APK, скачанного через публичный API RuStore
+(`backapi.rustore.ru/applicationData/overallInfo/...` → `download-link`).
+
+| Назначение | Эндпоинт | Доступ |
+| :--- | :--- | :--- |
+| Отправка SMS | `POST https://apptrade.ivoin.ru/api/v2/auth/send-sms` | без токена, нужны `phone`, `agreement_user`, `agreement_user_date`, `agreement_adv`, `agreement_adv_date`; ответ `expires_in: 600` |
+| Подтверждение SMS | `POST https://apptrade.ivoin.ru/api/v2/auth/verify-sms` | нужны `phone` и `code`, выдаёт токен |
+| Регистрация устройства | `POST https://apptrade.ivoin.ru/api/v2/devicekit` | `401 Unauthenticated` без токена |
+| Категории | `GET https://app.verno-dostavka.ru/api3/catalog/categories-and-combos` | `401`, нужен `Authorization: Bearer` |
+| Прочее | `/api3/catalog/combos/`, `/api3/catalog/sliders/`, `/api4/sync/stocks` | `401` без токена |
+
+Клиент отправляет заголовки `X-App-Version`, `X-Platform`,
+`X-Region-City-Id`, `X-Store`. Без токена, полученного по SMS, каталог
+недоступен: анонимного публичного API у Верного нет. Для добавления
+сборщика нужен либо легально полученный токен приложения, либо другой
+источник цен.
+
 ## Вспомогательные скрипты
 
 | Файл | Назначение |
