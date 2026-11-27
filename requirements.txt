@@ -1,0 +1,6 @@
+# Тестировалось на Python 3.12.10
+# Браузерным сборщикам (Auchan, Dixy, X5, Chizhik) нужен Camoufox.
+camoufox>=0.5.9
+
+# Только для экспериментального Scrapy-проекта в grocery/
+scrapy>=2.18.0
