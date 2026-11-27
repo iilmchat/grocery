@@ -17,7 +17,7 @@ BASE = "https://tvoydom.ru"
 API = BASE + "/api/internal/catalog/"
 CACHE = "tvoydom_cards_cache.jsonl"
 OUT = "tvoydom_products.json"
-WORKERS = 10
+WORKERS = 16
 
 HEADERS = {
     "User-Agent": ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
@@ -35,9 +35,9 @@ def get_sections():
 
 
 def fetch(slug, page):
-    for attempt in range(4):
+    for attempt in range(3):
         try:
-            r = S.post(API + slug, json={"page": page}, timeout=40)
+            r = S.post(API + slug, json={"page": page, "pageSize": 100}, timeout=40)
             if r.status_code == 200:
                 return r.json()
             if r.status_code in (429, 500, 502, 503, 504):
@@ -52,7 +52,7 @@ def walk(slug):
     cards = []
     seen_sigs = set()
     page = 1
-    while page <= 2000:
+    while page <= 500:
         d = fetch(slug, page)
         if not d:
             break
@@ -64,6 +64,9 @@ def walk(slug):
             break
         seen_sigs.add(sig)
         cards.extend(batch)
+        total = d.get("total") or 0
+        if page * 100 >= total:
+            break
         page += 1
     return slug, cards
 

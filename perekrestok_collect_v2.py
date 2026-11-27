@@ -120,48 +120,51 @@ async def is_captcha(page):
 
 
 async def scroll_collect(page):
-    """Скроллит до упора: конец списка = нет новых карточек И высота не растёт."""
+    """Перекрёсток: скролл через контейнеры + колёсико над карточками."""
     collected: dict = {}
     stable_rounds = 0
-    last_height = 0
+    last_count = 0
+
+    SCROLL_JS = """() => {
+        const els = [...document.querySelectorAll('*')].filter(e => {
+            const s = getComputedStyle(e);
+            return (s.overflowY === 'auto' || s.overflowY === 'scroll') &&
+                   e.scrollHeight > e.clientHeight + 100 && e.clientHeight > 200;
+        });
+        for (const el of els) el.scrollTop = el.scrollHeight;
+        window.scrollTo(0, document.body.scrollHeight);
+        return els.length;
+    }"""
+
     for _ in range(MAX_ROUNDS):
         cards = await page.evaluate(PARSE_CARDS)
         for c in cards:
             if c["id"] and c["id"] not in collected:
                 collected[c["id"]] = c
 
-        await page.evaluate("window.scrollTo(0, document.body.scrollHeight)")
-
-        got_new = False
-        waited = 0.0
-        while waited < SCROLL_WAIT_SEC:
-            # джиттер: шаг опроса не идеально ровный
-            await page.wait_for_timeout(int(POLL_INTERVAL * 1000) + random.randint(0, 200))
-            waited += POLL_INTERVAL
-            cards = await page.evaluate(PARSE_CARDS)
-            for c in cards:
-                if c["id"] and c["id"] not in collected:
-                    collected[c["id"]] = c
-                    got_new = True
-            if got_new:
-                break
-
-        # конец списка: не было новых карточек и высота страницы не изменилась
-        height = await page.evaluate("document.body.scrollHeight")
-        if not got_new and height == last_height:
+        n = len(collected)
+        if n == last_count:
             stable_rounds += 1
-            if stable_rounds >= 2:
+            if stable_rounds >= 3:      # три круга без новых — конец списка
                 break
         else:
             stable_rounds = 0
-        last_height = height
+        last_count = n
 
-        if not got_new:
-            # толчок: вверх на экран и обратно вниз — перезапускает триггер подгрузки
-            await page.evaluate(
-                "window.scrollTo(0, document.body.scrollHeight - window.innerHeight)")
-            await page.wait_for_timeout(400 + random.randint(0, 400))
-            await page.evaluate("window.scrollTo(0, document.body.scrollHeight)")
+        # 1) программный дожим всех контейнеров
+        await page.evaluate(SCROLL_JS)
+        await page.wait_for_timeout(400 + random.randint(0, 400))
+
+        # 2) колёсико над зоной карточек — самый «человеческий» сигнал
+        await page.mouse.move(960, 600)
+        await page.mouse.wheel(0, 1200)
+        await page.wait_for_timeout(int(POLL_INTERVAL * 1000) + random.randint(0, 300))
+
+        if stable_rounds >= 1:
+            # дёрганье: чуть вверх и снова вниз внутри активного скролла
+            await page.mouse.wheel(0, -2000)
+            await page.wait_for_timeout(300 + random.randint(0, 300))
+            await page.mouse.wheel(0, 2600)
 
     return list(collected.values())
 # === КОНЕЦ scroll_collect: если видишь эту строку, блок скопировался целиком ===
