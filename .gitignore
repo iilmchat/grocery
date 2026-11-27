@@ -58,3 +58,4 @@ __pycache__/
 dixy_probe*.json
 *_cache.jsonl
 
+dixy_details*.json
