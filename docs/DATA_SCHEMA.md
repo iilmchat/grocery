@@ -80,6 +80,11 @@
 Минимальный набор: `retailer`, `url`, `name`, `image_url`, `category_slug`,
 `price_min`, `price_max`, `scraped_at`. `price_min`/`price_max` вычисляются
 из всех чисел, найденных в элементах карточки с классом `price`.
+Поле	Описание
+price_min / price_max	Из акционной и обычной цены карточки
+price_old	Зачёркнутая цена (card__price-crossed), если есть
+rating, badge	Рейтинг («4.6») и бейдж («по акции»)
+category_name	Название секции с карточки
 
 ### Пятёрочка / Перекрёсток
 
