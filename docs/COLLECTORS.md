@@ -124,19 +124,41 @@
 его API-эндпоинты вытащены из APK, скачанного через публичный API RuStore
 (`backapi.rustore.ru/applicationData/overallInfo/...` → `download-link`).
 
-| Назначение | Эндпоинт | Доступ |
-| :--- | :--- | :--- |
-| Отправка SMS | `POST https://apptrade.ivoin.ru/api/v2/auth/send-sms` | без токена, нужны `phone`, `agreement_user`, `agreement_user_date`, `agreement_adv`, `agreement_adv_date`; ответ `expires_in: 600` |
-| Подтверждение SMS | `POST https://apptrade.ivoin.ru/api/v2/auth/verify-sms` | нужны `phone` и `code`, выдаёт токен |
-| Регистрация устройства | `POST https://apptrade.ivoin.ru/api/v2/devicekit` | `401 Unauthenticated` без токена |
-| Категории | `GET https://app.verno-dostavka.ru/api3/catalog/categories-and-combos` | `401`, нужен `Authorization: Bearer` |
-| Прочее | `/api3/catalog/combos/`, `/api3/catalog/sliders/`, `/api4/sync/stocks` | `401` без токена |
+Авторизация (проверена 27.11.2026 на реальном номере):
+
+1. `POST https://apptrade.ivoin.ru/api/v2/auth/send-sms` — телефон плюс
+   четыре поля согласий (`agreement_user`, `agreement_user_date`,
+   `agreement_adv`, `agreement_adv_date`); ответ `expires_in: 600`.
+2. `POST .../v2/auth/verify-sms` с `phone` и `code` — временный токен
+   `temp_…`, поле `is_registered: false`.
+3. `POST .../v2/register` с `{token, phone, name, lastname, region}` —
+   постоянный JWT и `delivery_token`. `region` — **не** 1, а ID из
+   `GET .../v2/region-indices` (Москва = `3`).
+4. `POST .../v2/devicekit` с JWT — регистрация устройства.
+
+Каталог без цен доступен через `apptrade` по подписанным S3-ссылкам
+(заголовок `Authorization: Bearer <JWT>`, `X-Region-City-Id: 3`):
+
+| Эндпоинт | Что отдаёт |
+| :--- | :--- |
+| `GET .../v2/catalog/categories` | URL на JSON с 229 категориями |
+| `GET .../v2/catalog/filters` | URL на JSON с 31 367 ID товаров (фacet'ы, без цен) |
+| `POST .../v2/catalog/products/urls` с `{"uuids": [...]}` | URLs на JSON товаров по их ID: имя, картинка, описание, характеристики, но **без цен** |
+
+Цены и остатки живут в API `https://app.verno-dostavka.ru/api3/`.
+Аутентификация там — **query-параметр `delivery_token`** (не `Authorization`):
+`GET /api3/opc/list` с ним отдаёт 1 806 магазинов. Но
+`/api3/catalog/categories-and-combos`, `/api3/catalog/combos/`,
+`/api4/sync/stocks` отвечают `400 «Не выбран магазин»` /
+`«Не указан магазин пользователя»`: не найден способ выбрать магазин
+ server-side (перебирались `X-Store`, `store`, `store_uid`, `store_id`,
+ `opc`, cookies и т.п.). Без выбранного магазина цены недоступны.
 
 Клиент отправляет заголовки `X-App-Version`, `X-Platform`,
-`X-Region-City-Id`, `X-Store`. Без токена, полученного по SMS, каталог
-недоступен: анонимного публичного API у Верного нет. Для добавления
-сборщика нужен либо легально полученный токен приложения, либо другой
-источник цен.
+`X-Region-City-Id`, `X-Store`. Токены хранятся вне репозитория. Для
+завершения сборщика нужно выяснить, каким запросом приложение фиксирует
+выбранный магазин (проще всего — поймать трафик приложения после выбора
+магазина в интерфейсе).
 
 ## Вспомогательные скрипты
 
