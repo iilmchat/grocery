@@ -210,6 +210,34 @@ TCP, обменять код на токен не удалось. Хост
 (`user_not_found`). Дальше — повторить OTP, когда auth-хост поднимется,
 и проверить `/catalog/sync`.
 
+## Магнит — `magnit_collect.py` (webgate API сайта)
+
+В отличие от предыдущих сетей, у Магнита есть полноценный интернет-магазин
+`https://magnit.ru/` с ценами. Сайт на Nuxt; API вызывается без авторизации:
+
+- `POST https://magnit.ru/webgate/v2/goods/search`
+- заголовки: `X-Client-Name: magnit`, `X-Device-Platform: Web`,
+  `X-App-Version: 2026.11.27-12.47`, `X-Platform-Version`, `X-Device-ID`,
+  `X-Device-Tag: disabled`;
+- тело: `{pagination:{limit:50,offset}, sort:{order:"desc",type:"popularity"},
+  storeCode:"992301", storeType:"dostavka", catalogType:"2", term:"",
+  categories:[id]}`.
+
+Важно: `limit` больше 50 и `offset` больше ~10 000 дают 400 (`pagoffset`).
+Поэтому сборщик разбивает каталог по **753 категориям** из
+`/__sitemap__/catalog.xml` и в каждой идёт по `pagination.nextOffset`.
+Поля `categories` должны быть целыми числами; `categoryIDs` игнорируется.
+`storeCode` берётся из `window.__NUXT__.config` главной страницы
+(по умолчанию Краснодар, `992301`), переопределяется `MAGNIT_STORE_CODE`.
+
+Цены приходят **в копейках** (`price`, `promotion.oldPrice`), скидка — в
+`promotion`. Ещё доступны `/webgate/v1/goods/filters` (фильтры/бренды),
+`/webgate/v2/goods/multisearch`, `/webgate/catalog-bdui/v2/shelf`; картинки
+раздаёт `images-foodtech.magnit.ru`.
+
+Контрольный прогон 27.11.2026 для магазина `992301`: **21 126 товаров**,
+все с ценами, без ошибок; 279 категорий с товарами (из 752 URL в sitemap).
+
 ## Вспомогательные скрипты
 
 | Файл | Назначение |
