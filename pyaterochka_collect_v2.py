@@ -11,7 +11,7 @@ LINKS_FILE = "pyaterochka_links.json"
 DONE_FILE = "pyaterochka_done.json"
 BASE = "https://5ka.ru"
 
-SCROLL_WAIT_SEC = 12     # сколько ждём новые карточки после прокрута
+SCROLL_WAIT_SEC = 18     # сколько ждём новые карточки после прокрута
 POLL_INTERVAL = 1.0      # с каким шагом опрашиваем DOM
 MAX_ROUNDS = 200         # страховка от бесконечного цикла
 
@@ -299,7 +299,7 @@ async def main():
             done.append(link)
             json.dump(done, open(DONE_FILE, "w", encoding="utf-8"))
 
-            await asyncio.sleep(5)
+            await asyncio.sleep(10)
 
     json.dump(list(seen.values()), open(OUT, "w", encoding="utf-8"),
               ensure_ascii=False, indent=2)
